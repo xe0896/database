@@ -41,6 +41,7 @@ const uint32_t TABLE_MAX_SIZE = TABLE_MAX_PAGES * ROWS_PER_PAGE;
 
 void free_input_buffer(InputBuffer* input_buffer);
 ExecuteResult execute_statement(Statement* statement, Table* table);
+void* get_page(Pager* pager, uint32_t page_num);
 
 void read_input(InputBuffer *input_buffer) {
     // getline takes the buffer and the size of it and updates what is provided by the user to the buffer and updates length
@@ -84,6 +85,19 @@ void db_close(Table* table) {
     free(table);
 }
 
+NodeType get_node_type(void* node) {
+    return *(uint8_t*)(node + NODE_TYPE_OFFSET);
+}
+
+void set_node_type(void* node, NodeType type) {
+    *(uint8_t*)(node + NODE_TYPE_OFFSET) = type;
+}
+
+uint32_t* leaf_node_num_cells(void* page) {
+    // The number of cells located in the header
+    return (uint32_t*)(page + NUM_CELLS_OFFSET);
+}
+
 Cursor* table_start(Table* table) {
     Cursor* cursor = malloc(sizeof(Cursor));
 
@@ -123,8 +137,24 @@ void initialise_leaf_node(void* node) {
     // Creating a leaf node would make the num cells being 0 (dereferencing)
     *leaf_node_num_cells(node) = 0;
     // Cast to uint8_t first to apply offset to a void pointer then dereference to then apply initialisation values
-    *(uint8_t*)(node + NODE_TYPE_OFFSET) = NODE_LEAF;
-    *(uint8_t*)(node + IS_ROOT_OFFSET) = true;
+
+    set_node_type(node, NODE_LEAF);
+}
+
+void* leaf_node_cell(void* page, uint32_t cell_num) {
+    // Grab the number of cells for this given node/page
+    //uint32_t number_of_cells = *leaf_node_num_cells(page);
+    /* Not really necessary
+    if(number_of_cells < cell_num) {
+        printf("Provided cell number is beyond number of cells recorded.\n");
+        exit(EXIT_FAILURE);
+    }
+    */   
+
+    // The starting cell would be the page + the INITIAL_CELL_OFFSET so we get to the first cell (to skip the header)
+    void* starting_cell = page + INITIAL_CELL_OFFSET;
+    // Given this starting cell we grab the cell_num and hop cell_num number of LEAF_NODE_CELL_SIZE's to get to the cell of the provided cell number
+    return starting_cell + (cell_num * LEAF_NODE_CELL_SIZE);
 }
 
 void* leaf_node_value(void* node, uint32_t cell_num) {
@@ -139,25 +169,8 @@ uint32_t* leaf_node_key(void* node, uint32_t cell_num) {
     return (uint32_t*) cell;
 }
 
-void* leaf_node_cell(void* page, uint32_t cell_num) {
-    // Grab the number of cells for this given node/page
-    uint32_t number_of_cells = *leaf_node_num_cells(page);
-    /* Not really necessary
-    if(number_of_cells < cell_num) {
-        printf("Provided cell number is beyond number of cells recorded.\n");
-        exit(EXIT_FAILURE);
-    }
-    */   
-
-    // The starting cell would be the page + the INITIAL_CELL_OFFSET so we get to the first cell (to skip the header)
-    void* starting_cell = page + INITIAL_CELL_OFFSET;
-    // Given this starting cell we grab the cell_num and hop cell_num number of LEAF_NODE_CELL_SIZE's to get to the cell of the provided cell number
-    return starting_cell + (cell_num * LEAF_NODE_CELL_SIZE);
-}
-
-uint32_t* leaf_node_num_cells(void* page) {
-    // The number of cells located in the header
-    return (uint32_t *)(page + NUM_CELLS_OFFSET);
+uint32_t get_unused_page_num(Pager* pager) {
+    return pager->num_pages;
 }
 
 void* get_page(Pager* pager, uint32_t page_num) {
@@ -250,7 +263,7 @@ PreparedResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
     // Statement type is labelled as INSERT so execute command knows what to execute
     statement->type = STATEMENT_INSERT;
     // strtok saves its state so we read insert and pass input_buffer->buffer as the initial state and read until " " so reads "insert"
-    char* insert = strtok(input_buffer->buffer, " ");
+    strtok(input_buffer->buffer, " ");
     // Given that it saved it state we can pass NULL to make it start from the previous state, " " from the same idea above
     char* id_str = strtok(NULL, " ");
     char* username = strtok(NULL, " ");
@@ -335,7 +348,10 @@ void serialise(Row *source, void *destination) {
     memcpy(destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
 }
 
-void shift_insert(void* page, uint32_t key, uint32_t num_cells, Cursor* cursor) {
+void shift_insert(void* page, uint32_t num_cells, Cursor* cursor) {   
+    // A case where this would just append would be when cursor->cell_num = L and num_cells is L so this won't execute
+    // and given that cell_num points to the next available slot, the append would be applied using serialise(.., num_cells)
+    // rather then making a new slot which is what the below does
     if(cursor->cell_num < num_cells) {
         // cursor->cell_num is wrong as it points to the end, not implemented yet
         for(uint32_t i = num_cells; i > cursor->cell_num; i--) {
@@ -349,6 +365,24 @@ void shift_insert(void* page, uint32_t key, uint32_t num_cells, Cursor* cursor) 
     }
 }
 
+ExecuteResult split_insert(Cursor* cursor, Row row, void* page, uint32_t num_cells, uint32_t idx) {
+    uint32_t id = row.id;
+    void* right_child = malloc(PAGE_SIZE);
+    initialise_leaf_node(right_child);
+    
+    for(uint32_t i = 0; i < (CELLS_PER_PAGE/2); i++) {
+        memcpy(leaf_node_cell(right_child, i), leaf_node_cell(page, i + (CELLS_PER_PAGE/2)), LEAF_NODE_CELL_SIZE);
+    }
+
+    if(idx > CELLS_PER_PAGE/2) {
+        shift_insert(right_child, num_cells, cursor);
+    } else {
+
+    }
+
+    return EXECUTE_SUCCESS;
+}
+
 ExecuteResult execute_insert(Statement* statement, Table *table) {
     //printf("Number of Rows: %d\n", table->num_rows);
     // Since a node takes a whole page the amount of pages in the table (including the file as we calculate that when the db is opened,
@@ -359,25 +393,53 @@ ExecuteResult execute_insert(Statement* statement, Table *table) {
 
     // Returns the start of the page at the end
     void *page = get_page(table->pager, table->root_page_num);
-
-    // Number of cells at the end since table->root_page_num from above
     uint32_t num_cells = *leaf_node_num_cells(page);
-    if(num_cells >= CELLS_PER_PAGE) {
-        printf("Cannot split yet.\n");
-        return EXECUTE_TABLE_FULL;
-    }
 
     // The cursor can locate the cell number
+    int id = statement->row_to_insert.id;
+
+    uint32_t L = 0;
+    uint32_t R = num_cells;
+    // The reason for the weird binary search is that we do not want
+    // to do midpoint - 1 as uint_32t that becomes negative would underflow and become
+    // very large, so we set it to the midpoint that was tested instead rather then skip it
+    // we want this binary search to not only find a duplicate but also find an index
+    // where we can insert this key into
+    while(L != R) {
+        uint32_t midpoint = (L + R)/2;
+        uint32_t key = *leaf_node_key(page, midpoint);
+        if(key == id) {
+            return EXECUTE_DUPLICATE_KEY;
+        } else if (*leaf_node_key(page, midpoint) < id) {
+            L = midpoint + 1;
+        } else {
+            R = midpoint;
+        }  
+    }
+    // For the append case if the given id was the greatest of them all then
+    // it wouldn't of triggered R = midpoint so then an L == R would imply that 
+    // we should just append, handled by shift_insert condition
+    // Number of cells at the end since table->root_page_num from above
     Cursor* cursor = table_end(table);
-    uint32_t cell_num = cursor->cell_num;
-    shift_insert(page, statement->row_to_insert.id, num_cells, cursor);
+    cursor->cell_num = L;
+
+    if(num_cells >= CELLS_PER_PAGE) {
+        printf("Max NUM CELLS REACHED BOIII.\n");
+        printf("num_cells: %d, CELLS_PER_PAGE: %d\n", num_cells, CELLS_PER_PAGE);
+        return split_insert(cursor, statement->row_to_insert, page, num_cells, L);
+        //return EXECUTE_TABLE_FULL;
+        //return split_insert(cursor, statement->row_to_insert);
+    }
+
+    shift_insert(page, num_cells, cursor);
+    free(cursor);
 
     // leaf_node_key returns the pointer for the key for this given cell_num in this page, cast to uint32_t* to know how many bytes
     // then dereference to assign it to the id stored in the statement (assigning to the header in the cell)
-    *(uint32_t*)leaf_node_key(page, cell_num) = statement->row_to_insert.id;
+    *(uint32_t*)leaf_node_key(page, L) = id;
 
     // Given the statement and the value of the leaf node for this cell number, copy the row into the bytes (insertion of serialised row)
-    serialise(&(statement->row_to_insert), leaf_node_value(page, cell_num));
+    serialise(&(statement->row_to_insert), leaf_node_value(page, L));
 
     // Now we have add a new cell to this page, so increment
     (*leaf_node_num_cells(page))++;
@@ -537,7 +599,9 @@ int main(int argc, char* argv[]) {
             case(EXECUTE_TABLE_FULL):
                 printf("Table is full.\n");
                 break;
-
+            case(EXECUTE_DUPLICATE_KEY):
+                printf("Duplicate key provided.\n");
+                break;
         }  
     }
 }

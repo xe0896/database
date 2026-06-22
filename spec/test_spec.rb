@@ -57,4 +57,28 @@ describe 'database' do
         expect(result).to match_array(["db > ", "db > Negative ID."])
     end
 
+    it 'sorted keys' do
+        result_sorted_keys = run_script(["insert 10 foo foo", "insert 5 foo foo", "select", ".exit"])
+        # Order does matter in this case since its a sequential check so we use eq not match_array
+        expect(result_sorted_keys).to eq([
+            "db > Executed.",
+            "db > Executed.",
+            "db > (5, foo, foo)", 
+            "(10, foo, foo)", 
+            "Executed.",
+            "db > ", 
+        ])
+    end
+
+    it 'duplicate key' do
+        result_duplicate_keys = run_script(["insert 1 foo foo", "insert 1 foo foo", ".exit"])
+        expect(result_duplicate_keys).to eq([
+            "db > Executed.", 
+            "db > Duplicate key provided.", 
+            "db > "
+        ])
+    end
+    
+
+
 end
