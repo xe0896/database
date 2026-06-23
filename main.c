@@ -6,42 +6,7 @@
 #include <stdbool.h>
 
 #include "typedef.h"
-
-// Row size of known columns
-const uint32_t ID_SIZE = size_of_attribute(Row, id);
-const uint32_t USERNAME_SIZE = COLUMN_USERNAME_SIZE;
-const uint32_t EMAIL_SIZE = COLUMN_EMAIL_SIZE;
-
-// Header of a node size
-const uint8_t NODE_TYPE_SIZE = HEADER_NODE_TYPE_SIZE;
-const uint8_t IS_ROOT_SIZE = HEADER_IS_ROOT_SIZE;
-const uint32_t PARENT_POINTER_SIZE = HEADER_PARENT_POINTER_SIZE;
-const uint32_t NUM_CELLS_SIZE = HEADER_NUM_CELLS_SIZE;
-const uint32_t HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE + NUM_CELLS_SIZE;
-
-// Row offsets
-const uint32_t ID_OFFSET = 0;
-const uint32_t USERNAME_OFFSET = ID_OFFSET + ID_SIZE;
-const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
-const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
-const uint32_t LEAF_NODE_CELL_SIZE = ID_SIZE + ROW_SIZE;
-
-// Node offsets
-const uint32_t NODE_TYPE_OFFSET = 0;
-const uint32_t IS_ROOT_OFFSET = NODE_TYPE_OFFSET + NODE_TYPE_SIZE;
-const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
-const uint32_t NUM_CELLS_OFFSET = PARENT_POINTER_OFFSET + PARENT_POINTER_SIZE;
-const uint32_t INITIAL_CELL_OFFSET = NUM_CELLS_OFFSET + NUM_CELLS_SIZE;
-
-// Useful constants to know about
-const uint32_t ROWS_PER_PAGE = PAGE_SIZE/ROW_SIZE;
-const uint32_t AVAILABLE_CELLS_SPACE = PAGE_SIZE - HEADER_SIZE;
-const uint32_t CELLS_PER_PAGE = AVAILABLE_CELLS_SPACE/LEAF_NODE_CELL_SIZE;
-const uint32_t TABLE_MAX_SIZE = TABLE_MAX_PAGES * ROWS_PER_PAGE;
-
-void free_input_buffer(InputBuffer* input_buffer);
-ExecuteResult execute_statement(Statement* statement, Table* table);
-void* get_page(Pager* pager, uint32_t page_num);
+#include "offsets.h"
 
 void read_input(InputBuffer *input_buffer) {
     // getline takes the buffer and the size of it and updates what is provided by the user to the buffer and updates length
@@ -60,6 +25,11 @@ void pager_flush(Pager* pager, uint32_t page_num) {
     lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
     // Providing the page stored in the cache, write this into the provided file (nbytes: PAGE_SIZE)
     write(pager->file_descriptor, pager->pages[page_num], PAGE_SIZE);
+}
+
+void free_input_buffer(InputBuffer* input_buffer) {
+    free(input_buffer->buffer);
+    free(input_buffer);
 }
 
 void db_close(Table* table) {
@@ -83,6 +53,54 @@ void db_close(Table* table) {
     }
     free(table->pager);
     free(table);
+}
+
+
+void* get_page(Pager* pager, uint32_t page_num) {
+    // The page number being greater then the number of pages implies that there is not enough space as one node takes a page
+    if (page_num >= TABLE_MAX_PAGES) {
+        printf("Tried to fetch page out of bounds\n");
+        exit(EXIT_FAILURE);
+    }
+    // May exist already, given the page number ask the pager for its page
+    void* page = pager->pages[page_num];
+
+    // If it exists then we can return it
+    if(page != NULL) {
+        return page;
+    }
+
+    // Given that it doesn't exist then it either doesn't exist at all or is in the file
+    void* new_page = malloc(PAGE_SIZE);
+
+    //uint32_t num_pages = pager->file_length / PAGE_SIZE;
+    //if(pager->file_length % PAGE_SIZE) num_pages++; // partial page
+
+    // In the file, the requested page number and it not being in the pager but still being within the number of pages means it is in the file
+    if(page_num < pager->num_pages) {
+        // Set the offset to be the page of the given page number (including header but we don't care we just want the whole page including the header)
+        lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+        // off_t file_length = lseek(file_descriptor, 0, SEEK_END);
+        // Read the page, would provide the bytes read into the buffer new_page
+        ssize_t page_file = read(pager->file_descriptor, new_page, PAGE_SIZE);
+        if (page_file == -1) {
+            perror("read");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Could either be an empty page from previous malloc or could be a page read from the file
+    pager->pages[page_num] = new_page;
+
+    // Given the page_num being greater or equal to the number of pages recorded, we must update so we can flush accurately since
+    // the flusher uses num_pages stored in pager as we add more pages
+    if(page_num >= pager->num_pages) {
+        // +1 due to indexing, if we think of the initial state where we have no pages, if we add a new page so lives in index 0
+        // the number of pages is 1 not 0 so we can't do pager->num_pages = page_num (0) 
+        pager->num_pages = page_num + 1; 
+    }
+
+    return new_page;
 }
 
 NodeType get_node_type(void* node) {
@@ -171,53 +189,6 @@ uint32_t* leaf_node_key(void* node, uint32_t cell_num) {
 
 uint32_t get_unused_page_num(Pager* pager) {
     return pager->num_pages;
-}
-
-void* get_page(Pager* pager, uint32_t page_num) {
-    // The page number being greater then the number of pages implies that there is not enough space as one node takes a page
-    if (page_num >= TABLE_MAX_PAGES) {
-        printf("Tried to fetch page out of bounds\n");
-        exit(EXIT_FAILURE);
-    }
-    // May exist already, given the page number ask the pager for its page
-    void* page = pager->pages[page_num];
-
-    // If it exists then we can return it
-    if(page != NULL) {
-        return page;
-    }
-
-    // Given that it doesn't exist then it either doesn't exist at all or is in the file
-    void* new_page = malloc(PAGE_SIZE);
-
-    //uint32_t num_pages = pager->file_length / PAGE_SIZE;
-    //if(pager->file_length % PAGE_SIZE) num_pages++; // partial page
-
-    // In the file, the requested page number and it not being in the pager but still being within the number of pages means it is in the file
-    if(page_num < pager->num_pages) {
-        // Set the offset to be the page of the given page number (including header but we don't care we just want the whole page including the header)
-        lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
-        // off_t file_length = lseek(file_descriptor, 0, SEEK_END);
-        // Read the page, would provide the bytes read into the buffer new_page
-        ssize_t page_file = read(pager->file_descriptor, new_page, PAGE_SIZE);
-        if (page_file == -1) {
-            perror("read");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    // Could either be an empty page from previous malloc or could be a page read from the file
-    pager->pages[page_num] = new_page;
-
-    // Given the page_num being greater or equal to the number of pages recorded, we must update so we can flush accurately since
-    // the flusher uses num_pages stored in pager as we add more pages
-    if(page_num >= pager->num_pages) {
-        // +1 due to indexing, if we think of the initial state where we have no pages, if we add a new page so lives in index 0
-        // the number of pages is 1 not 0 so we can't do pager->num_pages = page_num (0) 
-        pager->num_pages = page_num + 1; 
-    }
-
-    return new_page;
 }
 
 void* cursor_value(Cursor* cursor) {
@@ -323,11 +294,6 @@ InputBuffer* new_input_buffer() {
     return input_buffer;
 }
 
-void free_input_buffer(InputBuffer* input_buffer) {
-    free(input_buffer->buffer);
-    free(input_buffer);
-}
-
 void print_row(Row* row) {
     printf("(%d, %s, %s)\n", row->id, row->username, row->email);
 }
@@ -365,21 +331,53 @@ void shift_insert(void* page, uint32_t num_cells, Cursor* cursor) {
     }
 }
 
+void set_node_root(void* page, bool status) {
+    *(uint8_t *)(page + IS_ROOT_OFFSET) = status;
+}
+
+void initialise_internal_node(void* page) {
+    set_node_type(page, NODE_INTERNAL);    
+    set_node_root(page, true);
+    *leaf_node_num_cells(page) = 0;
+}
+
 ExecuteResult split_insert(Cursor* cursor, Row row, void* page, uint32_t num_cells, uint32_t idx) {
     uint32_t id = row.id;
+    // The node is full so we must split, we create a new page for the (right leaf)
     void* right_child = malloc(PAGE_SIZE);
+    void* left_child = malloc(PAGE_SIZE);
+    // Initialise it
     initialise_leaf_node(right_child);
+    initialise_leaf_node(left_child);
     
-    for(uint32_t i = 0; i < (CELLS_PER_PAGE/2); i++) {
-        memcpy(leaf_node_cell(right_child, i), leaf_node_cell(page, i + (CELLS_PER_PAGE/2)), LEAF_NODE_CELL_SIZE);
+    // The given page of the full node (page) copies its upper half cells to the right child as the right child
+    // needs to store the greater half of the elements to enforce binary search
+    for(uint32_t i = 0; i < (CELLS_PER_PAGE/2); i++) { // CELLS_PER_PAGE = 13, (CELLS_PER_PAGE/2) = 6
+        // The i will be for the location of the right child and the offset would be (CELL_PER_PAGE/2) for the 
+        // given page
+        printf("RIGHT, i: %d, to: %d\n", i, i + (CELLS_PER_PAGE/2) + 1);
+        memcpy(leaf_node_cell(right_child, i), leaf_node_cell(page, i + (CELLS_PER_PAGE/2) + 1), LEAF_NODE_CELL_SIZE);
     }
 
+    for(uint32_t i = 0; i < (CELLS_PER_PAGE/2) + 1; i++) {
+        printf("LEFT, i: %d, to: %d\n", i, i);
+        memcpy(leaf_node_cell(left_child, i), leaf_node_cell(page, i), LEAF_NODE_CELL_SIZE);
+    }
+
+
+    printf("idx: %d\n", idx);
+
+    // The idx provided by the location it should be by the prior binary search can determine whether or not it should be
+    // given to the left or right leaf
     if(idx > CELLS_PER_PAGE/2) {
-        shift_insert(right_child, num_cells, cursor);
+        // Create space to insert if it is greater then CELLS_PER_PAGE/2 (right leaf)
+        cursor->cell_num = idx - ((CELLS_PER_PAGE/2) + 1);
+        shift_insert(right_child, CELLS_PER_PAGE/2, cursor);
     } else {
-
+        cursor->cell_num = idx;
+        shift_insert(left_child, (CELLS_PER_PAGE/2), cursor);
     }
-
+    
     return EXECUTE_SUCCESS;
 }
 
@@ -410,12 +408,15 @@ ExecuteResult execute_insert(Statement* statement, Table *table) {
         uint32_t key = *leaf_node_key(page, midpoint);
         if(key == id) {
             return EXECUTE_DUPLICATE_KEY;
-        } else if (*leaf_node_key(page, midpoint) < id) {
+        } else if (key < id) {
             L = midpoint + 1;
         } else {
             R = midpoint;
         }  
     }
+
+    printf("idx: %d\n", L);
+
     // For the append case if the given id was the greatest of them all then
     // it wouldn't of triggered R = midpoint so then an L == R would imply that 
     // we should just append, handled by shift_insert condition
