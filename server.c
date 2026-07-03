@@ -13,6 +13,7 @@
 #include "offsets.h"
 
 uint32_t get_next_leaf(void *page);
+void set_next_leaf(void *page, uint32_t page_num);
 
 void pager_flush(Pager *pager, uint32_t page_num) {
     // Sets the offset from the page to the provided page number (PAGE_SIZE to get it in bytes)
@@ -162,7 +163,7 @@ void initialise_leaf_node(void *node) {
     // Creating a leaf node would make the num cells being 0 (dereferencing)
     *leaf_node_num_cells(node) = 0;
     // Cast to uint8_t first to apply offset to a void pointer then dereference to then apply initialisation values
-
+    set_next_leaf(node, 0);
     set_node_type(node, NODE_LEAF);
 }
 
@@ -216,18 +217,22 @@ void *cursor_value(Cursor *cursor) {
     // Request the page stored for the cursor
     void *page = get_page(pager, page_num);
 
+    printf("PAGE_NUM: %d\n", page_num);
+    printf("CELL_NUMS: %d\n", cell_num);
+    printf("NUM_CELLS: %d\n", *leaf_node_num_cells(page));
     // Return the cell for that cursor given the cell_num to get the offset from the page
     return leaf_node_value(page, cell_num);
 }
 
 void cursor_advance(Cursor *cursor) {
-    // Advancing a cursor would increment the cell_num (this is just advancing no read so increment straight away)
-    cursor->cell_num++;
     // Given the cursor page number we get the page
     void *page = get_page(cursor->table->pager, cursor->page_num);
 
     // Request the number of cells for this page
     uint32_t num_cells = *leaf_node_num_cells(page);
+
+    // Advancing a cursor would increment the cell_num (this is just advancing no read so increment straight away)
+    cursor->cell_num++;
 
     // This cell number that we advanced to may be past the number of cells in this page, if so we must record it in the cursor
     if (cursor->cell_num >= num_cells) {
@@ -405,25 +410,39 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
     void *left_page = get_page(pager, left_num);
     initialise_leaf_node(left_page);
 
-    // The given page of the full node (page) copies its upper half cells to the right child as the right child
-    // needs to store the greater half of the elements to enforce binary search
-    for (uint32_t i = 0; i < (CELLS_PER_PAGE / 2); i++) { // CELLS_PER_PAGE = 13, (CELLS_PER_PAGE/2) = 6
-        // The i will be for the location of the right child and the offset would be (CELL_PER_PAGE/2) for the
-        // given page
-        printf("RIGHT, i: %d, to: %d\n", i, i + (CELLS_PER_PAGE / 2) + 1);
-        memcpy(leaf_node_cell(right_page, i), leaf_node_cell(page, i + (CELLS_PER_PAGE / 2) + 1), LEAF_NODE_CELL_SIZE);
+    uint32_t left_bound = (CELLS_PER_PAGE / 2) + 1;
+    uint32_t right_bound = (CELLS_PER_PAGE / 2);
+
+    if (CELLS_PER_PAGE % 2 == 0) {
+        left_bound = (CELLS_PER_PAGE / 2);
     }
 
-    for (uint32_t i = 0; i < (CELLS_PER_PAGE / 2) + 1; i++) {
+    // The given page of the full node (page) copies its upper half cells to the right child as the right child
+    // needs to store the greater half of the elements to enforce binary search
+
+    // If CELLS_PER_PAGE is odd like 6 then left should have 3 and right should have 3, so it should be an even distribution
+    // so i < CELLS_PER_PAGE / 2 for left and i < CELLS_PER_PAGE / 2 for the right, for an odd case we add an extra to left (Random choice)
+    // so i < (CELLS_PER_PAGE / 2) + 1 for the left loop
+
+    for (uint32_t i = 0; i < right_bound; i++) { // CELLS_PER_PAGE = 13, (CELLS_PER_PAGE/2) = 6
+        // The i will be for the location of the right child and the offset would be (CELL_PER_PAGE/2) for the
+        // given page
+        printf("RIGHT, i: %d, to: %d\n", i, i + (CELLS_PER_PAGE / 2));
+        memcpy(leaf_node_cell(right_page, i), leaf_node_cell(page, i + left_bound), LEAF_NODE_CELL_SIZE);
+    }
+
+    for (uint32_t i = 0; i < left_bound; i++) {
         printf("LEFT, i: %d, to: %d\n", i, i);
         memcpy(leaf_node_cell(left_page, i), leaf_node_cell(page, i), LEAF_NODE_CELL_SIZE);
     }
 
-    *leaf_node_num_cells(right_page) = (CELLS_PER_PAGE / 2);
-    *leaf_node_num_cells(left_page) = (CELLS_PER_PAGE / 2) + 1;
+    *leaf_node_num_cells(right_page) = right_bound;
+    *leaf_node_num_cells(left_page) = left_bound;
 
-    set_next_leaf(page, right_num);
-    set_next_leaf(page, 0);
+    printf("This was called: %d\n", right_num);
+
+    set_next_leaf(left_page, right_num);
+    set_next_leaf(right_page, 0);
 
     // print_page(right_page);
     print_page(pager, left_page);
@@ -431,22 +450,22 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
 
     // The idx provided by the location it should be by the prior binary search can determine whether or not it should be
     // given to the left or right leaf
-    if (idx > CELLS_PER_PAGE / 2) {
+    if (idx > left_bound) {
         // 7-12
         // Create space to insert if it is greater then CELLS_PER_PAGE/2 (right leaf)
-        cursor->cell_num = idx - ((CELLS_PER_PAGE / 2) + 1);
-        insert_to_node(right_page, cursor, row, CELLS_PER_PAGE / 2, parent_num);
+        cursor->cell_num = idx - left_bound;
+        insert_to_node(right_page, cursor, row, right_bound, parent_num);
     } else {
         // 0-6
         cursor->cell_num = idx;
-        insert_to_node(left_page, cursor, row, (CELLS_PER_PAGE / 2) + 1, parent_num);
+        insert_to_node(left_page, cursor, row, left_bound, parent_num);
     }
 
     free(cursor);
 
     initialise_internal_node(page, true);
     // set_node_right_child(page, )
-    uint32_t key = *(leaf_node_key(page, CELLS_PER_PAGE / 2)); // key = max(left)
+    uint32_t key = *(leaf_node_key(page, left_bound)); // key = max(left)
     printf("Key: %d\n", key);
     set_node_right_child(page, right_num);
 
@@ -479,7 +498,7 @@ void *search_internals(Pager *pager, void *node, uint32_t id) {
         }
 
         if (L < *internal_node_num_cells(current_node)) {
-            current_node = get_page(pager, *(uint32_t *)internal_node_pointer(node, L));
+            current_node = get_page(pager, *(uint32_t *)internal_node_pointer(current_node, L));
         } else {
             current_node = get_page(pager, *internal_right_child(current_node));
         }
@@ -596,6 +615,9 @@ ExecuteResult execute_select(Table *table) {
 
     Row row;
     Cursor *cursor = table_start(table);
+
+    void *root_page = get_page(table->pager, table->root_page_num);
+
     while (!cursor->end_of_table) {
         deserialise(&row, cursor_value(cursor));
         // Advance
@@ -684,7 +706,7 @@ Table *db_open(const char *file_name) {
     // Created database file, the last line of pager_open() would of made this not 0 if the file already has stuff in it
     if (pager->num_pages == 0) {
         // The root page wouldn't be a thing in a new file/empty file so we can assign it to 0, this would of eventually split
-        void *root_page = get_page(pager, 0);
+        void *root_page = get_page(pager, table->root_page_num);
         initialise_leaf_node(root_page);
     }
 
