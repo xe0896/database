@@ -344,6 +344,10 @@ void set_node_root(void *page, bool status) {
     *(uint8_t *)(page + IS_ROOT_OFFSET) = status;
 }
 
+NodeType get_node_isroot(void *page) {
+    return *(uint8_t *)(page + IS_ROOT_OFFSET);
+}
+
 void set_node_right_child(void *page, uint32_t page_num) {
     *(uint32_t *)(page + INTERNAL_NODE_RIGHT_NUM) = page_num;
 }
@@ -463,14 +467,23 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
 
     free(cursor);
 
-    initialise_internal_node(page, true);
-    // set_node_right_child(page, )
-    uint32_t key = *(leaf_node_key(page, left_bound)); // key = max(left)
-    printf("Key: %d\n", key);
-    set_node_right_child(page, right_num);
+    if (get_node_isroot(page) == true) {
+        initialise_internal_node(page, true);
+        // set_node_right_child(page, )
+        uint32_t key = *(leaf_node_key(page, left_bound)); // key = max(left)
+        printf("Key: %d\n", key);
+        set_node_right_child(page, right_num);
 
-    *(uint32_t *)internal_node_pointer(page, 0) = left_num;
-    *(uint32_t *)internal_node_key(page, 0) = key;
+        *(uint32_t *)internal_node_pointer(page, 0) = left_num;
+        *(uint32_t *)internal_node_key(page, 0) = key;
+    } else {
+        if (*leaf_node_num_cells(page) < KEY_VALUE_PER_PAGE) {
+            // Internal node has space to add a key and pointer to the new splitted page
+
+        } else {
+            // Internal node would need to split, different case
+        }
+    }
 
     return EXECUTE_SUCCESS;
 }

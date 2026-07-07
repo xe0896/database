@@ -97,8 +97,7 @@ int main() {
 
     freeaddrinfo(client_res);
 
-    /*
-    for (int i = 1; i < 30; i++) {
+    for (int i = 1; i < 20; i++) {
         char str[20];
         char *pos = str;
 
@@ -121,7 +120,6 @@ int main() {
         if (send_result != SEND_SUCCESS)
             break;
     }
-    */
 
     while (true) {
         print_prompt();
