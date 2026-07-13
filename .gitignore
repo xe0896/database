@@ -3,3 +3,7 @@ btree_leaf_tutorial.pdf
 storage.db
 test.db
 .vscode
+.DS_Store
+.clang-format
+client
+server

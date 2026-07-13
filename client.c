@@ -54,10 +54,9 @@ void print_prompt() {
     printf("db > ");
 }
 
-int main() {
-    // Child process
-    InputBuffer *input_buffer = new_input_buffer();
-
+// Keep trying to connect to the server until it comes back up (e.g. after a recompile).
+// Returns a connected client_fd.
+int connect_to_server() {
     struct addrinfo client_hints;
     struct addrinfo *client_ptr, *client_res;
 
@@ -75,29 +74,36 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    int client_fd;
+    while (true) {
+        for (client_ptr = client_res; client_ptr != NULL; client_ptr = client_ptr->ai_next) {
+            int client_fd = socket(client_ptr->ai_family, client_ptr->ai_socktype, client_ptr->ai_protocol);
+            if (client_fd == -1)
+                continue;
 
-    for (client_ptr = client_res; client_ptr != NULL; client_ptr = client_ptr->ai_next) {
-        client_fd = socket(client_ptr->ai_family, client_ptr->ai_socktype, client_ptr->ai_protocol);
-        if (client_fd == -1)
-            continue;
+            // We are testing for an address that allows us to connect to the server, so this is not bind() but connect() instead
+            int client_connect = connect(client_fd, client_ptr->ai_addr, client_ptr->ai_addrlen);
 
-        // We are testing for an address that allows us to connect to the server, so this is not bind() but connect() instead
-        int client_connect = connect(client_fd, client_ptr->ai_addr, client_ptr->ai_addrlen);
+            if (client_connect == 0) {
+                freeaddrinfo(client_res);
+                return client_fd;
+            }
 
-        if (client_connect == -1) {
-            perror("bind");
-            continue;
-        } else if (client_connect == 0) {
-            break;
+            close(client_fd);
         }
 
-        close(client_fd);
+        // No candidate accepted the connection, server is probably down/recompiling. Wait and retry.
+        printf("Could not reach server, retrying...\n");
+        sleep(1);
     }
+}
 
-    freeaddrinfo(client_res);
+int main() {
+    // Child process
+    InputBuffer *input_buffer = new_input_buffer();
 
-    for (int i = 1; i < 20; i++) {
+    int client_fd = connect_to_server();
+
+    for (int i = 3; i < 18; i++) {
         char str[20];
         char *pos = str;
 
@@ -137,16 +143,25 @@ int main() {
 
         SendResult send_result = send_message(client_fd, input_buffer->buffer, input_buffer->input_length);
 
-        if (send_result != SEND_SUCCESS)
-            break;
+        // Server went away (e.g. recompiled). Reconnect and re-prompt.
+        if (send_result != SEND_SUCCESS) {
+            printf("Lost connection to server, reconnecting...\n");
+            close(client_fd);
+            client_fd = connect_to_server();
+            continue;
+        }
 
         char *buf;
         uint32_t len;
 
         // send_message() is
         RecvResult recv_result = recv_message(client_fd, &buf, &len);
-        if (recv_result != RECV_SUCCESS)
-            break;
+        if (recv_result != RECV_SUCCESS) {
+            printf("Lost connection to server, reconnecting...\n");
+            close(client_fd);
+            client_fd = connect_to_server();
+            continue;
+        }
 
         printf("%s", buf);
     }

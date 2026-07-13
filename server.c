@@ -485,6 +485,10 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
         uint32_t new_page_num = pager->num_pages;
         void* new_page = get_page(pager, new_page_num);
         */
+
+        printf("Potentially reached\n");
+    } else {
+        printf("Unstable\n");
     }
 
     return EXECUTE_SUCCESS;
@@ -513,13 +517,20 @@ void *search_internals(Pager *pager, void *node, uint32_t *page_num, uint32_t id
         }
 
         if (L < *internal_node_num_cells(current_node)) {
-            page_num = (uint32_t *)internal_node_pointer(current_node, L);
+            // We need to cast and dereference since page_num is still a local
+            // the thing it is pointing to is not local
+            *page_num = *(uint32_t *)internal_node_pointer(current_node, L);
+            printf("Within: %d\n", *page_num);
             current_node = get_page(pager, *page_num);
         } else {
-            page_num = internal_right_child(current_node);
+            *page_num = *(uint32_t *)internal_right_child(current_node);
+            printf("Right: %d\n", *page_num);
             current_node = get_page(pager, *page_num);
         }
     }
+
+    printf("Final page_num: %d\n", *page_num);
+
     return current_node;
 }
 
@@ -538,7 +549,7 @@ ExecuteResult execute_insert(Statement *statement, Table *table) {
     void *page = get_page(table->pager, table->root_page_num);
     uint32_t parent_num = table->root_page_num;
 
-    uint32_t page_num;
+    uint32_t page_num = 100;
 
     if (get_node_type(page) == NODE_INTERNAL) {
         page = search_internals(table->pager, page, &page_num, id);
@@ -645,6 +656,8 @@ ExecuteResult execute_select(Table *table) {
     Cursor *cursor = table_start(table);
 
     void *root_page = get_page(table->pager, table->root_page_num);
+
+    printf("Right pointer: %d\n", *internal_right_child(root_page));
 
     while (!cursor->end_of_table) {
         deserialise(&row, cursor_value(cursor));
@@ -866,6 +879,11 @@ int main(int argc, char *argv[]) {
         // -1 implies that there was an error so this wasn't successful
         if (sock_fd == -1)
             continue;
+
+        // Allow rebinding to a port still in TIME_WAIT from the previous run,
+        // otherwise bind() fails with EADDRINUSE right after a Ctrl-C restart
+        int yes = 1;
+        setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
         // Potential winner so we pass the IP and port which are buried under
         // ai_addr, we also pass the length of the struct stored in ai_addrlen
