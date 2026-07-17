@@ -340,6 +340,15 @@ void shift_insert(void *page, uint32_t num_cells, Cursor *cursor) {
     }
 }
 
+void shift_internal_insert(void *page, uint32_t num_cells, uint32_t idx) {
+    if (idx < num_cells) {
+        for (uint32_t i = num_cells; i > idx; i--) {
+            // memcpy(dst, src, size)
+            memcpy(internal_node_pointer(page, i), internal_node_pointer(page, i - 1), INTERNAL_NODE_CELL_SIZE);
+        }
+    }
+}
+
 void set_node_root(void *page, bool status) {
     *(uint8_t *)(page + IS_ROOT_OFFSET) = status;
 }
@@ -403,9 +412,20 @@ void print_page(Pager *pager, void *current_page) {
 }
 
 ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cells, uint32_t idx, uint32_t parent_num) {
+    uint32_t left_bound = (CELLS_PER_PAGE / 2) + 1;
+    uint32_t right_bound = (CELLS_PER_PAGE / 2);
+
+    if (CELLS_PER_PAGE % 2 == 0) {
+        left_bound = (CELLS_PER_PAGE / 2);
+    }
+
+    Pager *pager = cursor->table->pager;
+
+    // The given page of the full node (page) copies its upper half cells to the right child as the right child
+    // needs to store the greater half of the elements to enforce binary search
+
     if (get_node_isroot(page) == true && get_node_type(page) == NODE_LEAF) {
         uint32_t id = row.id;
-        Pager *pager = cursor->table->pager;
         // The node is full so we must split, we create a new page(s)
         uint32_t right_num = pager->num_pages;
         void *right_page = get_page(pager, right_num);
@@ -414,16 +434,6 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
         uint32_t left_num = pager->num_pages;
         void *left_page = get_page(pager, left_num);
         initialise_leaf_node(left_page);
-
-        uint32_t left_bound = (CELLS_PER_PAGE / 2) + 1;
-        uint32_t right_bound = (CELLS_PER_PAGE / 2);
-
-        if (CELLS_PER_PAGE % 2 == 0) {
-            left_bound = (CELLS_PER_PAGE / 2);
-        }
-
-        // The given page of the full node (page) copies its upper half cells to the right child as the right child
-        // needs to store the greater half of the elements to enforce binary search
 
         // If CELLS_PER_PAGE is odd like 6 then left should have 3 and right should have 3, so it should be an even distribution
         // so i < CELLS_PER_PAGE / 2 for left and i < CELLS_PER_PAGE / 2 for the right, for an odd case we add an extra to left (Random choice)
@@ -479,16 +489,45 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
         *(uint32_t *)internal_node_pointer(page, 0) = left_num;
         *(uint32_t *)internal_node_key(page, 0) = key;
         printf("reached\n");
-    } else if (*leaf_node_num_cells(page) < KEY_VALUE_PER_PAGE && get_node_type(page) == NODE_INTERNAL) {
-        // Internal node has space to add a key and pointer to the new splitted page
-        /*
-        uint32_t new_page_num = pager->num_pages;
-        void* new_page = get_page(pager, new_page_num);
-        */
-
-        printf("Potentially reached\n");
     } else {
-        printf("Unstable\n");
+        uint32_t leaf_parent_num = get_parent_pointer(page);
+        void *parent_page = get_page(pager, leaf_parent_num);
+        if ((get_node_type(parent_page) == NODE_INTERNAL) && *leaf_node_num_cells(parent_page) < KEY_VALUE_PER_PAGE) {
+            uint32_t new_page_num = pager->num_pages;
+
+            void *new_page = get_page(pager, new_page_num);
+            for (int i = 0; i < right_bound; i++) {
+                memcpy(leaf_node_cell(new_page, i), leaf_node_cell(page, i + left_bound), LEAF_NODE_CELL_SIZE);
+            }
+
+            uint32_t next_leaf_num = get_next_leaf(page);
+            set_next_leaf(page, new_page_num);
+            set_next_leaf(new_page, next_leaf_num);
+
+            uint32_t key = *(leaf_node_key(page, left_bound));
+
+            uint32_t num_cells = *leaf_node_num_cells(parent_page);
+            uint32_t L = 0;
+            uint32_t R = num_cells;
+
+            while (L != R) {
+                uint32_t midpoint = (L + R) / 2;
+                uint32_t key = *(uint32_t *)internal_node_key(parent_page, num_cells);
+
+                if (key == id) {
+                    printf("Not sure how this is possible\n");
+                    exit(EXIT_FAILURE);
+                } else if (key < id) {
+                    L = midpoint + 1;
+                } else {
+                    R = midpoint;
+                }
+            }
+
+            shift_internal_insert(parent_page, num_cells, L);
+            *(uint32_t *)internal_node_pointer(page, L) = left_num;
+            *(uint32_t *)internal_node_key(page, L) = key;
+        }
     }
 
     return EXECUTE_SUCCESS;
@@ -549,7 +588,7 @@ ExecuteResult execute_insert(Statement *statement, Table *table) {
     void *page = get_page(table->pager, table->root_page_num);
     uint32_t parent_num = table->root_page_num;
 
-    uint32_t page_num = 100;
+    uint32_t page_num;
 
     if (get_node_type(page) == NODE_INTERNAL) {
         page = search_internals(table->pager, page, &page_num, id);
