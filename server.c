@@ -504,7 +504,7 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
             set_next_leaf(page, new_page_num);
             set_next_leaf(new_page, next_leaf_num);
 
-            uint32_t key = *(leaf_node_key(page, left_bound));
+            uint32_t split_key = *(leaf_node_key(page, left_bound));
 
             uint32_t num_cells = *leaf_node_num_cells(parent_page);
             uint32_t L = 0;
@@ -512,12 +512,12 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
 
             while (L != R) {
                 uint32_t midpoint = (L + R) / 2;
-                uint32_t key = *(uint32_t *)internal_node_key(parent_page, num_cells);
+                uint32_t key = *(uint32_t *)internal_node_key(parent_page, midpoint);
 
-                if (key == id) {
+                if (key == split_key) {
                     printf("Not sure how this is possible\n");
                     exit(EXIT_FAILURE);
-                } else if (key < id) {
+                } else if (key < split_key) {
                     L = midpoint + 1;
                 } else {
                     R = midpoint;
@@ -525,8 +525,17 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
             }
 
             shift_internal_insert(parent_page, num_cells, L);
-            *(uint32_t *)internal_node_pointer(page, L) = left_num;
-            *(uint32_t *)internal_node_key(page, L) = key;
+            *(uint32_t *)internal_node_key(parent_page, L) = split_key;
+
+            if (L == *leaf_node_num_cells(parent_page)) {
+                uint32_t right_num_page = *internal_right_child(parent_page);
+                set_node_right_child(parent_page, new_page_num);
+                *(uint32_t *)internal_node_pointer(parent_page, L) = right_num_page;
+            } else {
+                *(uint32_t *)internal_node_pointer(parent_page, L) = new_page_num;
+            }
+
+            (*leaf_node_num_cells(parent_page))++; // parent page increased in num_cells
         }
     }
 
