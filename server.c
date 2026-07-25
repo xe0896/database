@@ -496,13 +496,29 @@ ExecuteResult split_insert(Cursor *cursor, Row row, void *page, uint32_t num_cel
             uint32_t new_page_num = pager->num_pages;
 
             void *new_page = get_page(pager, new_page_num);
+
             for (int i = 0; i < right_bound; i++) {
                 memcpy(leaf_node_cell(new_page, i), leaf_node_cell(page, i + left_bound), LEAF_NODE_CELL_SIZE);
             }
 
+            initialise_leaf_node(new_page);
+            *leaf_node_num_cells(new_page) = right_bound;
+            *leaf_node_num_cells(page) = left_bound;
+
             uint32_t next_leaf_num = get_next_leaf(page);
             set_next_leaf(page, new_page_num);
             set_next_leaf(new_page, next_leaf_num);
+
+            if (idx > left_bound) {
+                // 7-12
+                // Create space to insert if it is greater then CELLS_PER_PAGE/2 (right leaf)
+                cursor->cell_num = idx - left_bound;
+                insert_to_node(new_page, cursor, row, right_bound);
+            } else {
+                // 0-6
+                cursor->cell_num = idx;
+                insert_to_node(page, cursor, row, left_bound);
+            }
 
             uint32_t split_key = *(leaf_node_key(page, left_bound));
 
@@ -600,6 +616,7 @@ ExecuteResult execute_insert(Statement *statement, Table *table) {
     uint32_t page_num;
 
     if (get_node_type(page) == NODE_INTERNAL) {
+        printf("Reached\n");
         page = search_internals(table->pager, page, &page_num, id);
 
         printf("Current page number: %d, Parent page number: %d\n", page_num, get_parent_pointer(page));

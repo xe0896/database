@@ -103,7 +103,7 @@ int main() {
 
     int client_fd = connect_to_server();
 
-    for (int i = 3; i < 18; i++) {
+    for (int i = 0; i < 50; i++) {
         char str[20];
         char *pos = str;
 
