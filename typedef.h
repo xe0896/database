@@ -1,20 +1,10 @@
 #ifndef TYPEDEF_H
 #define TYPEDEF_H
 
-#define size_of_attribute(Struct, Attribute) sizeof(((Struct *)0)->Attribute)
 #define COLUMN_USERNAME_SIZE 32
 #define COLUMN_EMAIL_SIZE 255
 #define TABLE_MAX_PAGES 100
 #define PAGE_SIZE 4096
-
-#define PORT "5001"
-
-#define HEADER_NODE_TYPE_SIZE sizeof(uint8_t)
-#define HEADER_IS_ROOT_SIZE sizeof(uint8_t)
-#define HEADER_PARENT_POINTER_SIZE sizeof(uint32_t)
-#define HEADER_NUM_CELLS_SIZE sizeof(uint32_t)
-#define HEADER_RIGHT_NUM_SIZE sizeof(uint32_t)
-#define HEADER_NEXT_LEAF sizeof(uint32_t)
 
 typedef struct {
     char *buffer;

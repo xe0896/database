@@ -103,7 +103,31 @@ int main() {
 
     int client_fd = connect_to_server();
 
-    for (int i = 0; i < 50; i++) {
+    for (int i = 10; i < 60; i++) {
+        char str[20];
+        char *pos = str;
+
+        memcpy(pos, "insert ", 7);
+        pos += 7;
+        // snprintf() writes down the given integer i into the buffer str and when it is done it would put
+        // a \0 for us, so we can get the length of it using strlen() since strlen() waits for \0
+        snprintf(pos, sizeof(str), "%d", i);
+        int len = strlen(pos);
+
+        pos += len;
+
+        memcpy(pos, " foo foo", 8);
+
+        pos += 8;
+
+        *pos = '\0';
+
+        SendResult send_result = send_message(client_fd, str, len + 15);
+        if (send_result != SEND_SUCCESS)
+            break;
+    }
+
+    for (int i = 1; i < 7; i++) {
         char str[20];
         char *pos = str;
 

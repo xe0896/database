@@ -5,7 +5,7 @@ HEADERS = protocol.h typedef.h offsets.h
 all: server client
 
 server: server.c protocol.c $(HEADERS)
-	$(CC) $(CFLAGS) -pthread server.c protocol.c -o server
+	$(CC) $(CFLAGS) -pthread server.c protocol.c btree.c -o server
 
 client: client.c protocol.c $(HEADERS)
 	$(CC) $(CFLAGS) client.c protocol.c -o client
